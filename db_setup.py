@@ -4,8 +4,7 @@ sqlite_connection = sqlite3.connect('surveys.db')
 cursor = sqlite_connection.cursor()
 
 cursor.execute("""CREATE TABLE IF NOT EXISTS users(
-   userid INT PRIMARY KEY,
-   telegramid INT,
+   telegramid INT PRIMARY KEY,
    firstname TEXT,
    lastname TEXT,
    age INT);
@@ -14,8 +13,9 @@ sqlite_connection.commit()
 
 cursor.execute("""CREATE TABLE IF NOT EXISTS surveys(
    surveyid INT PRIMARY KEY,
-   startdate TEXT,
-   enddate TEXT);
+   title TEXT,
+   author INT,
+   FOREIGN KEY(author) REFERENCES users(telegramid));
 """)
 sqlite_connection.commit()
 
@@ -36,7 +36,7 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS results(
    datecompleted TEXT,
    userid INT,
    testid INT,
-   FOREIGN KEY(userid) REFERENCES users(userid),
+   FOREIGN KEY(userid) REFERENCES users(telegramid),
    FOREIGN KEY(testid) REFERENCES tests(testid));
 """)
 sqlite_connection.commit()
@@ -47,6 +47,6 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS answers(
    userid INT,
    option INT,
    FOREIGN KEY(questionid) REFERENCES questions(questionid),
-   FOREIGN KEY(userid) REFERENCES users(userid));
+   FOREIGN KEY(userid) REFERENCES users(telegramid));
 """)
 sqlite_connection.commit()

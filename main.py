@@ -24,8 +24,8 @@ all_users = []
 admin = 431846556
 
 
-def table_val(userid: int, telegramid: str, firstname: str, lastname: str, age: int):
-    cursor.execute('INSERT INTO users VALUES (?, ?, ?, ?, ?)', (userid, telegramid, firstname, lastname, age))
+def push_users(telegramid: str, firstname: str, lastname: str, age: int):
+    cursor.execute('INSERT INTO users VALUES (?, ?, ?, ?)', (telegramid, firstname, lastname, age))
     db_connection.commit()
 
 def register_check(message):
@@ -51,25 +51,50 @@ def start(message):
     if not register_check(message):
         bot.send_message(message.chat.id, "Прежде чем начать, пожалуйста, укажите ваш возраст:")
         bot.register_next_step_handler(message, get_age)
-    else:
-        bot.register_next_step_handler(message, menu)
+    menu(message.chat.id)
+
+
+@bot.callback_query_handler(func=lambda call: True)
+def handle_query(call):
+    if call.data == 'menu':
+        menu(call.message.chat.id)
+    if call.data == 'take survey':
+        survey_selector(call.message.chat.id)
+
 
 
 @bot.message_handler(commands=['menu'])
-def menu(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
+def get_to_menu(message):
+    menu(message.chat.id)
+
+
+def menu(chatid):
+    markup = types.InlineKeyboardMarkup()
+    markup.row(types.InlineKeyboardButton("Пройти опрос", callback_data='take survey'),
+               types.InlineKeyboardButton("Создать опрос", callback_data='create survey'))
+    markup.row(types.InlineKeyboardButton("Мои опросы", callback_data='my surveys'))
+    bot.send_message(chatid, "Выберите дальнейшее действие", reply_markup=markup)
+
+
+def survey_selector(chatid):
+    survey_markup = types.InlineKeyboardMarkup()
     # Запилить выбор только непройденных тестов ТУТ
-    cursor.execute("SELECT surveyid FROM surveys")
-    for i in range (1, cursor.rowcount + 3):
-        markup.add(types.KeyboardButton('Poll_' + str(i)))
-    bot.send_message(message.chat.id, 'Выберите опрос из предложенных', reply_markup=markup)
+    cursor.execute("SELECT title FROM surveys")
+    survey_list = cursor.fetchall()
+    if survey_list:
+        for i in range(len(survey_list)):
+            survey_markup.add(types.InlineKeyboardButton(survey_list[i], callback_data=survey_list[i]))
+        bot.send_message(chatid, 'Выберите опрос из предложенных', reply_markup=survey_markup)
+    else:
+        survey_markup.add(types.InlineKeyboardButton("Главное меню", callback_data='menu'))
+        bot.send_message(chatid, 'Нет доступных опросов', reply_markup=survey_markup)
 
 
 @bot.message_handler(content_types=['text'])
 # Переброс в меню при рандомном вводе
 def random_text_received(message):
     bot.send_message(message.chat.id, "Отправляю Вас в меню")
-    bot.register_next_step_handler(message, menu)
+    menu(message.chat.id)
 
 
 def get_age(message):
@@ -78,8 +103,7 @@ def get_age(message):
     if age == 0:
         try:
             age = int(message.text)
-            table_val(userid=next_user_id,
-                      telegramid=message.from_user.id,
+            push_users(telegramid=message.from_user.id,
                       firstname=message.from_user.first_name,
                       lastname=message.from_user.last_name,
                       age=age)
@@ -87,7 +111,7 @@ def get_age(message):
         except ValueError:
             bot.send_message(message.from_user.id, 'Цифрами, пожалуйста')
             bot.register_next_step_handler(message, get_age)
-    bot.register_next_step_handler(message, menu)
+    menu(message.chat.id)
 
 
 ###########
@@ -166,3 +190,6 @@ def answer(message):
 
 
 bot.polling(none_stop=True)
+
+while True:
+    pass
