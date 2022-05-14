@@ -28,8 +28,14 @@ def push_users(telegramid: str, firstname: str, lastname: str, age: int):
     cursor.execute('INSERT INTO users VALUES (?, ?, ?, ?)', (telegramid, firstname, lastname, age))
     db_connection.commit()
 
-def register_check(message):
-    cursor.execute("SELECT * FROM users WHERE telegramid = ?", (message.from_user.id,))
+
+def register_check(user_id):
+    cursor.execute("SELECT * FROM users WHERE telegramid = ?", (user_id,))
+    return cursor.fetchall()
+
+
+def get_user_surveys(user_id):
+    cursor.execute("SELECT title FROM surveys WHERE author = ?", (user_id,))
     return cursor.fetchall()
 
 
@@ -42,13 +48,13 @@ def start(message):
                      """Данный бот предназначен для создания опросов и их прохождения пользователями
 Доступный функционал: 
 1. Регистрация в системе
+2. Главное меню бота
 Планы:
 1. Создание опросов всесильной админской рукой
-2. Главное меню бота
-3. Возможность нелинейного прохождения существующих опросов
-4. Сохранение результатов пользователей
-5. Сбор общей статистики на основе пользовательских данных""")
-    if not register_check(message):
+2. Возможность нелинейного прохождения существующих опросов
+3. Сохранение результатов пользователей
+4. Сбор общей статистики на основе пользовательских данных""")
+    if not register_check(message.from_user.id):
         bot.send_message(message.chat.id, "Прежде чем начать, пожалуйста, укажите ваш возраст:")
         bot.register_next_step_handler(message, get_age)
     menu(message.chat.id)
@@ -57,9 +63,17 @@ def start(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_query(call):
     if call.data == 'menu':
-        menu(call.message.chat.id)
+        bot.edit_message_text("Выберите дальнейшее действие",
+                              call.message.chat.id,
+                              call.message.id,
+                              reply_markup=menu_markup())
     if call.data == 'take survey':
-        survey_selector(call.message.chat.id)
+        select_available_survey(call)
+    if call.data == 'create survey':
+        # Pls do something
+        pass
+    if call.data == 'my surveys':
+        select_user_survey(call)
 
 
 
@@ -68,26 +82,47 @@ def get_to_menu(message):
     menu(message.chat.id)
 
 
-def menu(chatid):
+def menu_markup():
     markup = types.InlineKeyboardMarkup()
     markup.row(types.InlineKeyboardButton("Пройти опрос", callback_data='take survey'),
                types.InlineKeyboardButton("Создать опрос", callback_data='create survey'))
     markup.row(types.InlineKeyboardButton("Мои опросы", callback_data='my surveys'))
-    bot.send_message(chatid, "Выберите дальнейшее действие", reply_markup=markup)
+    return markup
 
 
-def survey_selector(chatid):
-    survey_markup = types.InlineKeyboardMarkup()
+def menu(chatid):
+    bot.send_message(chatid, "Выберите дальнейшее действие", reply_markup=menu_markup())
+
+
+def select_available_survey(call):
+    available_survey_markup = types.InlineKeyboardMarkup()
     # Запилить выбор только непройденных тестов ТУТ
     cursor.execute("SELECT title FROM surveys")
-    survey_list = cursor.fetchall()
-    if survey_list:
-        for i in range(len(survey_list)):
-            survey_markup.add(types.InlineKeyboardButton(survey_list[i], callback_data=survey_list[i]))
-        bot.send_message(chatid, 'Выберите опрос из предложенных', reply_markup=survey_markup)
+    available_survey_list = cursor.fetchall()
+    if available_survey_list:
+        for i in range(len(available_survey_list)):
+            available_survey_markup.add(types.InlineKeyboardButton(available_survey_list[i], callback_data=available_survey_list[i]))
+        reply_text = "Выберите опрос из предложенных"
     else:
-        survey_markup.add(types.InlineKeyboardButton("Главное меню", callback_data='menu'))
-        bot.send_message(chatid, 'Нет доступных опросов', reply_markup=survey_markup)
+        available_survey_markup.add(types.InlineKeyboardButton("Главное меню", callback_data='menu'))
+        reply_text = "Нет доступных опросов"
+    bot.edit_message_text(reply_text, call.message.chat.id, call.message.id, reply_markup=available_survey_markup)
+
+
+def select_user_survey(call):
+    user_survey_markup = types.InlineKeyboardMarkup(row_width=2)
+    user_survey_list = get_user_surveys(call.message.from_user.id)
+    button_row = []
+    for title in user_survey_list:
+        button_row.append(title)
+        if len(button_row) == 2:
+            user_survey_markup.row(types.InlineKeyboardButton(button_row[0], callback_data=button_row[0]),
+                                   types.InlineKeyboardButton(button_row[1], callback_data=button_row[1]))
+            button_row = []
+    if button_row:
+        user_survey_markup.add(types.InlineKeyboardButton(button_row[0], callback_data=button_row[0]))
+    user_survey_markup.row(types.InlineKeyboardButton("<< Назад", callback_data='menu'))
+    bot.edit_message_text("Ваши опросы:", call.message.chat.id, call.message.id, reply_markup=user_survey_markup)
 
 
 @bot.message_handler(content_types=['text'])
@@ -112,81 +147,6 @@ def get_age(message):
             bot.send_message(message.from_user.id, 'Цифрами, пожалуйста')
             bot.register_next_step_handler(message, get_age)
     menu(message.chat.id)
-
-
-###########
-
-
-# def start(message):
-#     global reg;
-#     global ans;
-#     global uid;
-#     global adm_ans;
-#     global user_ans;
-#     global all_users;
-#     global count_quest;
-#     if not reg:
-#         db_connection.execute("SELECT * FROM bot;")
-#         all_users = db_connection.fetchall()
-#         for user in all_users:
-#             if user[1]=='message.from_user.id':
-#                 reg = True
-#                 count_quest = user[6]
-#                 break
-#     ans=[]
-#     user_ans=0
-#     if message.from_user.id == admin:
-#         if message.text.lower() == 'опрос':
-#             bot.register_next_step_handler(message, get_quest);
-#         else:
-#             bot.send_message(admin, 'Напишите \"опрос\"');
-#     else:
-#         if reg:
-#             bot.send_message(message.from_user.id, 'Выберите действие\n1.Получить опрос');
-#             if message.text == '1':
-#                 bot.register_next_step_handler(message, answer);
-
-
-def get_quest(message):
-    global quest
-    quest = message.text
-    bot.send_message(admin, 'Введите варианты ответа( чтобы закончить ввод напишите \"стоп\"')
-    bot.register_next_step_handler(message, get_ans)
-
-
-def get_ans(message):
-    global ans
-    global adm_ans
-    adm_ans = message.text
-    if adm_ans == 'стоп':
-        bot.send_message(admin, 'Вы хотите разослать опрос?')
-        bot.register_next_step_handler(message, send_quest)
-    else:
-        ans.append(adm_ans)
-        bot.register_next_step_handler(message, get_ans)
-
-
-def send_quest(message):
-    global check
-    k = 1
-    if message.text == 'Да' or message.text == 'да':
-        bot.send_message(message.chat.id, quest)
-        for i in ans:
-            bot.send_message(message.chat.id, str(k) + '. ' + str(i))
-            k += 1
-        check = 1
-
-
-def answer(message):
-    db_connection.execute("SELECT * FROM questions;")
-    questions = cursor.fetchall()
-    bot.send_message(message.from_user.id, questions[count_quest][1])
-    for i in range(10 + 2):
-        if questions[count_quest][i] != "NULL":
-            bot.send_message(message.from_user.id, questions[count_quest][i])
-        else:
-            break
-    bot.send_message(admin, message.text)
 
 
 bot.polling(none_stop=True)
