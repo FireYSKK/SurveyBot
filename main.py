@@ -2,6 +2,7 @@ import telebot
 from telebot import types
 import sqlite3
 import os.path
+from datetime import date
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 db_path = os.path.join(BASE_DIR, "surveys.db")
@@ -12,6 +13,24 @@ TOKEN = '5329387829:AAHdtHf3uf1J5lH8mTALsnm6NQznRUUYnOM'
 db_connection = sqlite3.connect(db_path, check_same_thread=False)
 cursor = db_connection.cursor()
 bot = telebot.TeleBot(TOKEN)
+
+
+class CurrentSurvey:
+    current_question_id = -1
+    current_survey_id = -1
+    current_user = 15 # Рандомное число, Ваня сказал 15
+    all_questions = []
+    def start_poll(self, survey_id: int, user_id):
+        self.current_survey_id = survey_id
+        self.all_questions = get_survey(survey_id)
+        self.current_question_id = -1
+        self.current_user = user_id
+    def pop_question(self) -> tuple:
+        self.current_question_id += 1
+        return self.all_questions[self.current_question_id]
+
+
+surveyBuffer = CurrentSurvey()
 
 
 # Взаимодействие с базой данных
@@ -28,7 +47,7 @@ def register_check(user_id) -> list[tuple]:
 
 
 def get_user_surveys(user_id) -> list[tuple]:
-    cursor.execute("SELECT title FROM surveys WHERE author = ?", (user_id,))
+    cursor.execute("SELECT surveyid, title FROM surveys WHERE author = ?", (user_id,))
     return cursor.fetchall()
 
 
@@ -38,7 +57,7 @@ if buff:
     next_survey_id = buff[-1][0] + 1
 else:
     next_survey_id = 1
-def push_survey(title: str, author: str):
+def push_survey(title: str, author: str) -> int:
     global next_survey_id
     cursor.execute('INSERT INTO surveys VALUES (?, ?, ?)', (next_survey_id, title, author))
     next_survey_id += 1
@@ -52,7 +71,7 @@ if buff:
     next_question_id = buff[-1][0] + 1
 else:
     next_question_id = 1
-def push_question(task: str, answers: list, surveyid: int):
+def push_question(task: str, answers: list, surveyid: int) -> int:
     global next_question_id
     while len(answers) < 4:
         answers.append(None)
@@ -61,6 +80,34 @@ def push_question(task: str, answers: list, surveyid: int):
     next_question_id += 1
     db_connection.commit()
     return next_question_id - 1
+
+
+cursor.execute("""SELECT answerid FROM answers""")
+buff = cursor.fetchall()
+if buff:
+    next_answer_id = buff[-1][0] + 1
+else:
+    next_answer_id = 1
+def push_answer(option: int, questionid: int, userid: int):
+    global next_answer_id
+    cursor.execute("""INSERT INTO answers VALUES (?, ?, ?, ?)""",
+                   (next_answer_id, questionid, userid, option))
+    next_answer_id += 1
+    db_connection.commit()
+
+
+cursor.execute("""SELECT resultid FROM results""")
+buff = cursor.fetchall()
+if buff:
+    next_result_id = buff[-1][0] + 1
+else:
+    next_result_id = 1
+def push_result(surveyid: int, userid: int):
+    global next_result_id
+    cursor.execute("""INSERT INTO results VALUES (?, ?, ?, ?)""",
+                   (next_result_id, date.today(), userid, surveyid))
+    next_result_id += 1
+    db_connection.commit()
 
 
 def get_survey_title(surveyid) -> str:
@@ -119,6 +166,11 @@ def edit_question_answer(questionid: int, answer_number: int, new_answer: str):
     db_connection.commit()
 
 
+def get_survey(surveyid: int) -> list[tuple]:
+    cursor.execute("""SELECT * FROM questions WHERE surveyid = ?""", (surveyid,))
+    return cursor.fetchall()
+
+
 # Handlers for everything
 
 
@@ -162,7 +214,7 @@ def handle_query(call):
         if call_data[0] == 'add_question':
             print('Create question')
             create_question(call, int(call_data[1]))
-        if call_data[0] == 'survey_editor':
+        if call_data[0] == 'edit_survey':
             print('Survey editor', call_data[1])
             survey_editor(call, int(call_data[1]))
         if call_data[0] == 'set_title':
@@ -183,6 +235,8 @@ def handle_query(call):
                     break
             else:
                 answers_overflow(call, call_data[1])
+        if call_data[0] == 'take_survey':
+            start_survey(call, call_data[1])
     if len(call_data) == 3:
         if call_data[0] == 'select_question':
             select_question(call, call_data[1], call_data[2])
@@ -194,11 +248,24 @@ def get_to_menu(message):
     menu(message.chat.id)
 
 
+@bot.message_handler(commands=['poll'])
+def get_to_poll(message):
+    bot.send_poll(message.chat.id, "Q?", ['1', '2', '3'], is_anonymous=False)
+
+
 @bot.message_handler(content_types=['text'])
 # Переброс в меню при рандомном вводе
 def random_text_received(message):
     bot.send_message(message.chat.id, "Отправляю Вас в меню")
     menu(message.chat.id)
+
+
+@bot.poll_answer_handler()
+def handle_poll_answer(poll_answer):
+    global surveyBuffer
+    print('Answer', surveyBuffer.all_questions[surveyBuffer.current_question_id][0], poll_answer.option_ids[0])
+    push_answer(poll_answer.option_ids[0], surveyBuffer.current_question_id, poll_answer.user.id)
+    next_survey_question(poll_answer.user.id)
 
 
 # Menu functions
@@ -229,7 +296,7 @@ def set_title(call, surveyid):
     edit_survey_title(surveyid, input_buff)
     set_title_markup = types.InlineKeyboardMarkup()
     set_title_markup.add(types.InlineKeyboardButton("<< К опросу",
-                                                   callback_data=" ".join(['survey_editor',
+                                                   callback_data=" ".join(['edit_survey',
                                                                            str(surveyid)])))
     bot.send_message(call.message.chat.id, "Название успешно изменено", reply_markup=set_title_markup)
 
@@ -295,9 +362,10 @@ def select_question(call, surveyid: int, nextop: str):
                   " ".join([nextop, str(questions[title - 1][0])]))
             button_row = []
     if button_row:
-        question_selection_markup.add(types.InlineKeyboardButton(button_row[0], callback_data=button_row[0]))
+        question_selection_markup.add(types.InlineKeyboardButton(button_row[0],
+                                                                 callback_data=" ".join([nextop, str(questions[0][0])])))
     question_selection_markup.add(types.InlineKeyboardButton('<< Назад',
-                                                             callback_data=" ".join(['survey_editor', str(surveyid)])))
+                                                             callback_data=" ".join(['edit_survey', str(surveyid)])))
     bot.edit_message_reply_markup(call.message.chat.id,
                                   call.message.id,
                                   reply_markup=question_selection_markup)
@@ -375,12 +443,14 @@ def answers_overflow(call, questionid):
 def select_available_survey(call):
     available_survey_markup = types.InlineKeyboardMarkup()
     # Запилить выбор только непройденных тестов ТУТ
-    cursor.execute("SELECT title FROM surveys")
+    cursor.execute("SELECT surveyid, title FROM surveys")
     available_survey_list = cursor.fetchall()
+    print(available_survey_list)
+    # Вот тута должен быть прям
     if available_survey_list:
         for i in range(len(available_survey_list)):
-            available_survey_markup.add(types.InlineKeyboardButton(available_survey_list[i][0],
-                                                                   callback_data=available_survey_list[i][0]))
+            available_survey_markup.add(types.InlineKeyboardButton(available_survey_list[i][1],
+                                                                   callback_data=" ".join(['take_survey', str(available_survey_list[i][0])])))
         reply_text = "Выберите опрос из предложенных"
     else:
         reply_text = "Нет доступных опросов"
@@ -388,18 +458,58 @@ def select_available_survey(call):
     bot.edit_message_text(reply_text, call.message.chat.id, call.message.id, reply_markup=available_survey_markup)
 
 
+def start_survey(call, surveyid: int) -> None:
+    global surveyBuffer
+    surveyBuffer.start_poll(survey_id=surveyid, user_id=call.message.from_user.id)
+    bot.edit_message_text("Выбирайте варианты ответа из предложенных\n"
+                          "Новый вопрос появится после ответа на предыдущий\n"
+                          f"Всего вопросов: {len(surveyBuffer.all_questions)}",
+                          call.message.chat.id,
+                          call.message.id)
+    next_survey_question(call.message.chat.id)
+
+
+
+def next_survey_question(chat_id) -> None:
+    global surveyBuffer
+    try:
+        current_question = surveyBuffer.pop_question()
+    except IndexError:
+        push_result(surveyBuffer.current_survey_id, surveyBuffer.current_user)
+        end_survey_markup = types.InlineKeyboardMarkup()
+        end_survey_markup.add(types.InlineKeyboardButton('Завершить опрос', callback_data='menu'))
+        bot.send_message(chat_id, "Опрос завершен\nСпасибо, что приняли участие", reply_markup=end_survey_markup)
+        return
+    print(current_question)
+    options = []
+    for i in range(2, 6):
+        if current_question[i]:
+            options.append(current_question[i])
+    bot.send_poll(chat_id,
+                  current_question[1],
+                  options,
+                  is_anonymous=False)
+
+
 def select_user_survey(call):
     user_survey_markup = types.InlineKeyboardMarkup(row_width=2)
     user_survey_list = get_user_surveys(call.message.from_user.id)
     button_row = []
-    for title in user_survey_list:
-        button_row.append(title[0])
+
+    print(user_survey_list)
+
+    for title in range(len(user_survey_list)):
+        button_row.append(user_survey_list[title][1])
+        print(button_row)
         if len(button_row) == 2:
-            user_survey_markup.row(types.InlineKeyboardButton(button_row[0], callback_data=button_row[0]),
-                                   types.InlineKeyboardButton(button_row[1], callback_data=button_row[1]))
+            user_survey_markup.row(types.InlineKeyboardButton(button_row[0],
+                                                              callback_data=" ".join(['edit_survey', str(user_survey_list[title - 1][0])])),
+                                   types.InlineKeyboardButton(button_row[1],
+                                                              callback_data=" ".join(['edit_survey', str(user_survey_list[title][0])])))
             button_row = []
     if button_row:
-        user_survey_markup.add(types.InlineKeyboardButton(button_row[0], callback_data=button_row[0]))
+        user_survey_markup.add(types.InlineKeyboardButton(button_row[0],
+                                                          callback_data=" ".join(['edit_survey', str(button_row)])))
     user_survey_markup.row(types.InlineKeyboardButton("<< Назад", callback_data='menu'))
     bot.edit_message_text("Ваши опросы:", call.message.chat.id, call.message.id, reply_markup=user_survey_markup)
 
