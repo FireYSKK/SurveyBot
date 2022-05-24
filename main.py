@@ -46,6 +46,14 @@ def register_check(user_id) -> list[tuple]:
     return cursor.fetchall()
 
 
+def get_surveys_for_user(user_id: int) -> list[tuple]:
+    cursor.execute("""SELECT *
+    FROM surveys
+    LEFT JOIN (SELECT * FROM results WHERE userid = ?) res
+    ON surveys.surveyid = res.surveyid WHERE userid IS NULL""", (user_id,))
+    return cursor.fetchall()
+
+
 def get_user_surveys(user_id) -> list[tuple]:
     cursor.execute("SELECT surveyid, title FROM surveys WHERE author = ?", (user_id,))
     return cursor.fetchall()
@@ -171,6 +179,16 @@ def get_survey(surveyid: int) -> list[tuple]:
     return cursor.fetchall()
 
 
+def delete_question(questionid: int) -> None:
+    cursor.execute("""DELETE FROM questions WHERE questionid = ?""", (questionid,))
+    db_connection.commit()
+
+
+def delete_survey(surveyid: int) -> None:
+    cursor.execute("""DELETE FROM surveys WHERE surveyid = ?""", (surveyid,))
+    db_connection.commit()
+
+
 # Handlers for everything
 
 
@@ -184,11 +202,12 @@ def start(message):
 Доступный функционал: 
 1. Регистрация в системе
 2. Главное меню бота
-3. Создание опросов всесильной админской рукой
+3. Создание опросов от лица пользователя
+4. Прохождение опросов (пока всех подряд)
+5. Сохранение результатов пользователей
 Планы:
-1. Возможность прохождения (желательно нелинейного) существующих опросов
-2. Сохранение результатов пользователей
-3. Сбор общей статистики на основе пользовательских данных""")
+1. Возможность нелинейного прохождения существующих опросов
+2. Сбор общей статистики на основе пользовательских данных""")
     if not register_check(message.from_user.id):
         bot.send_message(message.chat.id, "Прежде чем начать, пожалуйста, укажите ваш возраст:")
         bot.register_next_step_handler(message, get_age)
@@ -198,6 +217,7 @@ def start(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_query(call):
+    print(call.data)
     if call.data == 'menu':
         bot.edit_message_text("Выберите дальнейшее действие",
                               call.message.chat.id,
@@ -212,23 +232,26 @@ def handle_query(call):
     call_data = call.data.split()
     if len(call_data) == 2:
         if call_data[0] == 'add_question':
-            print('Create question')
+            #print('Create question')
             create_question(call, int(call_data[1]))
+        if call_data[0] == 'survey_menu':
+            #print('Survey editor', call_data[1])
+            survey_menu(call, int(call_data[1]))
         if call_data[0] == 'edit_survey':
-            print('Survey editor', call_data[1])
+            # print('Survey editor', call_data[1])
             survey_editor(call, int(call_data[1]))
         if call_data[0] == 'set_title':
-            print('Set title')
+            #print('Set title')
             set_title(call, int(call_data[1]))
         if call_data[0] == 'set_task':
-            print('Set task')
+            #print('Set task')
             set_task(call, int(call_data[1]))
         if call_data[0] == 'edit_question':
-            print('Edit question')
-            question_editor(call, get_surveyid_by_questionid(call_data[1]), call_data[1])
+            #print('Edit question')
+            question_editor(call, call_data[1])
         if call_data[0] == 'add_answer':
             answers = get_question_answers(call_data[1])
-            print('Add answer', answers)
+            #print('Add answer', answers)
             for answer in range(len(answers)):
                 if not answers[answer]:
                     set_answer(call, call_data[1], answer + 1)
@@ -237,6 +260,10 @@ def handle_query(call):
                 answers_overflow(call, call_data[1])
         if call_data[0] == 'take_survey':
             start_survey(call, call_data[1])
+        if call_data[0] == 'delete_survey':
+            survey_deletion_process(call, call_data[1])
+        if call_data[0] == 'delete_question':
+            question_deletion_process(call, call_data[1])
     if len(call_data) == 3:
         if call_data[0] == 'select_question':
             select_question(call, call_data[1], call_data[2])
@@ -263,8 +290,10 @@ def random_text_received(message):
 @bot.poll_answer_handler()
 def handle_poll_answer(poll_answer):
     global surveyBuffer
-    print('Answer', surveyBuffer.all_questions[surveyBuffer.current_question_id][0], poll_answer.option_ids[0])
-    push_answer(poll_answer.option_ids[0], surveyBuffer.current_question_id, poll_answer.user.id)
+    #print('Answer', surveyBuffer.all_questions[surveyBuffer.current_question_id][0], poll_answer.option_ids[0])
+    push_answer(poll_answer.option_ids[0],
+                surveyBuffer.all_questions[surveyBuffer.current_question_id][0],
+                poll_answer.user.id)
     next_survey_question(poll_answer.user.id)
 
 
@@ -296,11 +325,29 @@ def set_title(call, surveyid):
     edit_survey_title(surveyid, input_buff)
     set_title_markup = types.InlineKeyboardMarkup()
     set_title_markup.add(types.InlineKeyboardButton("<< К опросу",
-                                                   callback_data=" ".join(['edit_survey',
-                                                                           str(surveyid)])))
+                                                    callback_data=" ".join(['edit_survey', str(surveyid)])))
     bot.send_message(call.message.chat.id, "Название успешно изменено", reply_markup=set_title_markup)
 
 
+def survey_menu(call, surveyid):
+    survey_menu_markup = types.InlineKeyboardMarkup()
+    survey_menu_markup.add(types.InlineKeyboardButton("Статистика",
+                                                        callback_data=" ".join(['get_stat', str(surveyid)])))
+    survey_menu_markup.add(types.InlineKeyboardButton("Редактировать опрос",
+                                                        callback_data=" ".join(['edit_survey', str(surveyid)])))
+    survey_menu_markup.add(types.InlineKeyboardButton("Удалить опрос",
+                                                        callback_data=" ".join(['delete_survey', str(surveyid)])))
+    survey_menu_markup.add(types.InlineKeyboardButton("Готово", callback_data='menu'))
+    title = get_survey_title(surveyid)
+    questions = formatted_options(get_survey_questions(surveyid))
+    bot.edit_message_text(f"<b>{title}</b>"
+                          f"\n\n"
+                          f"Вопросы:\n"
+                          f"{questions}",
+                          call.message.chat.id, call.message.id, parse_mode='html', reply_markup=survey_menu_markup)
+
+
+# types.InlineKeyboardButton("Отмена", callback_data=" ".join(['delete_survey', str(surveyid)])),
 def survey_editor(call, surveyid):
     survey_editor_markup = types.InlineKeyboardMarkup()
     survey_editor_markup.add(types.InlineKeyboardButton("Изменить название",
@@ -312,18 +359,14 @@ def survey_editor(call, surveyid):
                                                             callback_data=" ".join(['select_question', str(surveyid), 'edit'])))
         survey_editor_markup.add(types.InlineKeyboardButton("Удалить вопрос",
                                                             callback_data=" ".join(['select_question', str(surveyid), 'delete'])))
-    survey_editor_markup.row(types.InlineKeyboardButton("Отмена",
-                                                        callback_data=" ".join(['delete_survey', str(surveyid)])),
-                             types.InlineKeyboardButton("Готово",
-                                                        callback_data='menu'))
+    survey_editor_markup.add(types.InlineKeyboardButton("Готово", callback_data=" ".join(['survey_menu', str(surveyid)])))
     title = get_survey_title(surveyid)
     questions = formatted_options(get_survey_questions(surveyid))
-    bot.edit_message_text(f"""
-<b>{title}</b>
-
-Вопросы:
-{questions}          
-                     """, call.message.chat.id, call.message.id, parse_mode='html', reply_markup=survey_editor_markup)
+    bot.edit_message_text(f"<b>{title}</b>"
+                          f"\n\n"
+                          f"Вопросы:\n"
+                          f"{questions}",
+                          call.message.chat.id, call.message.id, parse_mode='html', reply_markup=survey_editor_markup)
 
 
 def formatted_options(options):
@@ -342,7 +385,7 @@ def formatted_options(options):
 
 def create_question(call, surveyid):
     new_question_id = push_question(task='Новый вопрос', answers=[], surveyid=surveyid)
-    question_editor(call, surveyid, new_question_id)
+    question_editor(call, new_question_id)
 
 
 def select_question(call, surveyid: int, nextop: str):
@@ -352,14 +395,14 @@ def select_question(call, surveyid: int, nextop: str):
     nextop += '_question'
     for title in range(1, len(questions) + 1):
         button_row.append(str(title))
-        print(questions, button_row)
+        #print(questions, button_row)
         if len(button_row) == 2:
             question_selection_markup.row(types.InlineKeyboardButton(button_row[0],
                                                                      callback_data=" ".join([nextop, str(questions[title - 2][0])])),
                                           types.InlineKeyboardButton(button_row[1],
                                                                      callback_data=" ".join([nextop, str(questions[title - 1][0])])))
-            print(" ".join([nextop, str(questions[title - 2][0])]),
-                  " ".join([nextop, str(questions[title - 1][0])]))
+            #print(" ".join([nextop, str(questions[title - 2][0])]),
+            #      " ".join([nextop, str(questions[title - 1][0])]))
             button_row = []
     if button_row:
         question_selection_markup.add(types.InlineKeyboardButton(button_row[0],
@@ -371,7 +414,7 @@ def select_question(call, surveyid: int, nextop: str):
                                   reply_markup=question_selection_markup)
 
 
-def question_editor(call, surveyid, questionid):
+def question_editor(call, questionid):
     question_editor_markup = types.InlineKeyboardMarkup()
     question_editor_markup.add(types.InlineKeyboardButton("Изменить формулировку",
                                                           callback_data=" ".join(['set_task', str(questionid)])))
@@ -383,7 +426,7 @@ def question_editor(call, surveyid, questionid):
         question_editor_markup.add(types.InlineKeyboardButton("Удалить вариант ответа",
                                                               callback_data='delete_answer'))
     question_editor_markup.add(types.InlineKeyboardButton("Готово",
-                                                          callback_data='survey_editor ' + str(surveyid)))
+                                                          callback_data=" ".join(['edit_survey', str(get_surveyid_by_questionid(questionid))])))
     task = get_question_task(questionid)
     answers = formatted_options(get_question_answers(questionid))
     bot.edit_message_text(f"<b>{task}</b>"
@@ -443,9 +486,8 @@ def answers_overflow(call, questionid):
 def select_available_survey(call):
     available_survey_markup = types.InlineKeyboardMarkup()
     # Запилить выбор только непройденных тестов ТУТ
-    cursor.execute("SELECT surveyid, title FROM surveys")
-    available_survey_list = cursor.fetchall()
-    print(available_survey_list)
+    available_survey_list = get_surveys_for_user(call.from_user.id)
+    #(available_survey_list)
     # Вот тута должен быть прям
     if available_survey_list:
         for i in range(len(available_survey_list)):
@@ -480,7 +522,7 @@ def next_survey_question(chat_id) -> None:
         end_survey_markup.add(types.InlineKeyboardButton('Завершить опрос', callback_data='menu'))
         bot.send_message(chat_id, "Опрос завершен\nСпасибо, что приняли участие", reply_markup=end_survey_markup)
         return
-    print(current_question)
+    #print(current_question)
     options = []
     for i in range(2, 6):
         if current_question[i]:
@@ -496,22 +538,40 @@ def select_user_survey(call):
     user_survey_list = get_user_surveys(call.message.from_user.id)
     button_row = []
 
-    print(user_survey_list)
+    #print(user_survey_list)
 
     for title in range(len(user_survey_list)):
         button_row.append(user_survey_list[title][1])
-        print(button_row)
+        #print(button_row)
         if len(button_row) == 2:
             user_survey_markup.row(types.InlineKeyboardButton(button_row[0],
-                                                              callback_data=" ".join(['edit_survey', str(user_survey_list[title - 1][0])])),
+                                                              callback_data=" ".join(['survey_menu', str(user_survey_list[title - 1][0])])),
                                    types.InlineKeyboardButton(button_row[1],
-                                                              callback_data=" ".join(['edit_survey', str(user_survey_list[title][0])])))
+                                                              callback_data=" ".join(['survey_menu', str(user_survey_list[title][0])])))
             button_row = []
     if button_row:
         user_survey_markup.add(types.InlineKeyboardButton(button_row[0],
-                                                          callback_data=" ".join(['edit_survey', str(button_row)])))
+                                                          callback_data=" ".join(['survey_menu', str(user_survey_list[0][0])])))
     user_survey_markup.row(types.InlineKeyboardButton("<< Назад", callback_data='menu'))
     bot.edit_message_text("Ваши опросы:", call.message.chat.id, call.message.id, reply_markup=user_survey_markup)
+
+
+def survey_deletion_process(call, surveyid: int) -> None:
+    question_list = get_survey_questionids(surveyid)
+    for question in question_list:
+        delete_question(question[0])
+    delete_survey(surveyid)
+    survey_deletion_markup = types.InlineKeyboardMarkup()
+    survey_deletion_markup.add(types.InlineKeyboardButton("В главное меню", callback_data='menu'))
+    bot.edit_message_text("Опрос удален", call.message.chat.id, call.message.id, reply_markup=survey_deletion_markup)
+
+
+def question_deletion_process(call, questionid: int) -> None:
+    surveyid = get_surveyid_by_questionid(questionid)
+    delete_question(questionid)
+    survey_deletion_markup = types.InlineKeyboardMarkup()
+    survey_deletion_markup.add(types.InlineKeyboardButton("К опросу", callback_data=" ".join(['survey_menu', str(surveyid)])))
+    bot.edit_message_text("Вопрос удален", call.message.chat.id, call.message.id, reply_markup=survey_deletion_markup)
 
 
 # User input functions
